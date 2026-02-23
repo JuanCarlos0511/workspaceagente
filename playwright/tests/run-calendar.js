@@ -1,58 +1,73 @@
 const { chromium } = require('playwright');
 const path = require('path');
 
-(async () => {
-  // Usamos la misma carpeta donde guardaste la sesión
-  const userDataDir = path.join(__dirname, '../.auth-chrome');
+// Capturar argumentos: YYYY MM DD "Nombre de la Cita"
+const [,, year, month, day, appointmentTitle] = process.argv;
 
-  console.log('Iniciando navegador con sesión guardada...');
+if (!year || !month || !day || !appointmentTitle) {
+  console.error('❌ Uso: node calendar_extractor.js YYYY MM DD "Nombre de la Cita"');
+  process.exit(1);
+}
+
+(async () => {
+  const userDataDir = path.join(__dirname, '../.auth-chrome');
   
   const context = await chromium.launchPersistentContext(userDataDir, {
-    headless: true,
-    channel: 'chrome',
-    viewport: null,
-    ignoreDefaultArgs: ['--enable-automation'],
+    headless: true, // Optimizado para VPS
     args: [
-        '--disable-blink-features=AutomationControlled',
-        '--no-sandbox',
-        '--disable-infobars',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-blink-features=AutomationControlled',
     ]
   });
 
   const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
 
-  // Vamos directo al calendario
-  await page.goto('https://calendar.google.com/calendar/u/0/r/week/2026/2/22');
+  // 1. Construcción dinámica de la URL (Vista de día)
+  const targetUrl = `https://calendar.google.com/calendar/u/0/r/day/${year}/${month}/${day}`;
+  console.log(`📅 Navegando a: ${targetUrl}`);
 
   try {
-    // Esperamos un poco a que cargue la interacción
-    // Nota: Como es una semana futura (2026), asegúrate de que el evento exista en esa fecha real
-    
-    // Abre el evento en el calendario
-    console.log('Buscando evento...');
-    await page.getByRole('button', { name: 'De 3:30pm a 4:30pm, Chequeo' }).click();
+    await page.goto(targetUrl, { waitUntil: 'networkidle' });
 
-    // Abre el diálogo de invitación
-    console.log('Abriendo invitación...');
-    await page.getByRole('button', { name: 'Invitar con un vínculo' }).click();
+    // 2. Buscar el evento por su título
+    // Usamos una expresión regular para que coincida con el título sin importar la hora exacta
+    console.log(`🔍 Buscando evento: "${appointmentTitle}"...`);
+    const eventSelector = page.getByRole('button', { name: new RegExp(appointmentTitle, 'i') });
+    
+    await eventSelector.waitFor({ timeout: 10000 });
+    await eventSelector.click();
 
-    // --- EXTRACCIÓN DEL LINK ---
-    const enlaceLocator = page.getByRole('link', { name: 'https://calendar.app.google/' });
+    // 3. Abrir el diálogo de invitación
+    console.log('📂 Abriendo detalles...');
+    // Google a veces cambia el nombre del botón según el idioma del perfil
+    const inviteButton = page.getByRole('button', { name: /Invitar con un vínculo|Compartir/i });
     
-    // Esperamos explicitamente
-    await enlaceLocator.waitFor();
+    // Si el botón de invitar no es visible directamente, es que ya estamos en el modal
+    await page.waitForTimeout(1000); 
+
+    // 4. Extraer el enlace de invitación
+    console.log('🔗 Extrayendo enlace...');
+    // Buscamos el link que contiene el dominio de calendar.app
+    const enlaceLocator = page.locator('a[href*="calendar.app.google"]');
     
+    await enlaceLocator.waitFor({ timeout: 5000 });
     const urlInvitacion = await enlaceLocator.getAttribute('href');
 
-    console.log('\n🎉 ¡ÉXITO! -----------------------------------');
-    console.log('Enlace capturado:', urlInvitacion);
-    console.log('---------------------------------------------\n');
+    console.log('\n--------------------------------------------');
+    console.log('✅ CITA ENCONTRADA');
+    console.log('Título:', appointmentTitle);
+    console.log('Enlace:', urlInvitacion);
+    console.log('--------------------------------------------\n');
 
+    // Aquí podrías llamar a tu script de Python o registrar en Postgres
+    // mediante un console.log que tu sistema principal capture.
 
   } catch (error) {
-    console.error('❌ Ocurrió un error (¿Quizás no estás logueado o el evento no existe?):', error.message);
+    console.error('❌ Error:', error.message);
+    await page.screenshot({ path: `error-calendar-${day}-${month}.png` });
+    console.log('📸 Screenshot de error guardado.');
   } finally {
-    console.log('Cerrando navegador...');
     await context.close();
   }
 })();
