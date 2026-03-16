@@ -1,5 +1,7 @@
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 const { chromium } = require('playwright');
 const path = require('path');
+const { supabase, login } = require('../supabase');
 
 // Capturar argumentos: YYYY MM DD "Nombre de la Cita"
 const [,, year, month, day, appointmentTitle] = process.argv;
@@ -60,8 +62,30 @@ if (!year || !month || !day || !appointmentTitle) {
     console.log('Enlace:', urlInvitacion);
     console.log('--------------------------------------------\n');
 
-    // Aquí podrías llamar a tu script de Python o registrar en Postgres
-    // mediante un console.log que tu sistema principal capture.
+    // Registrar en Supabase (si hay sesión activa o RLS permite anon inserts)
+    try {
+      // Login opcional: set SUPABASE_USER y SUPABASE_PASS en .env para autenticar
+      if (process.env.SUPABASE_USER && process.env.SUPABASE_PASS) {
+        await login(process.env.SUPABASE_USER, process.env.SUPABASE_PASS);
+      }
+
+      const { error: dbError } = await supabase
+        .from('citas')
+        .insert({
+          titulo: appointmentTitle,
+          fecha: `${year}-${month}-${day}`,
+          enlace: urlInvitacion,
+          creado_en: new Date().toISOString(),
+        });
+
+      if (dbError) {
+        console.warn('⚠️  Supabase insert error:', dbError.message);
+      } else {
+        console.log('💾 Cita guardada en Supabase (tabla: citas)');
+      }
+    } catch (supaErr) {
+      console.warn('⚠️  Supabase:', supaErr.message);
+    }
 
   } catch (error) {
     console.error('❌ Error:', error.message);
